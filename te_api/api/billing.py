@@ -39,11 +39,16 @@ def get_billing_info(client_id):
 
 @get_group.command(name='tenant')
 @click.argument('client_id', type=str)
-def get_tenant(client_id):
-    """Client tenants list information"""
-    url = f"{Config.API_URL}/v1/billing/{client_id}/tenant/"
+@click.argument('tenant_id', required=False, type=str, default=None)
+def get_tenant(client_id, tenant_id):
+    """Client tenants list information (omit ID) / Client tenant detail information (with ID)"""
+    if tenant_id is not None:
+        url = f"{Config.API_URL}/v1/billing/{client_id}/tenant/{tenant_id}"
+        params = {}
+    else:
+        url = f"{Config.API_URL}/v1/billing/{client_id}/tenant/"
+        params = {}
     headers = get_auth_headers()
-    params = {}
     data = None
     try:
         response = requests.get(url, headers=headers, params=params, json=data)
@@ -109,11 +114,16 @@ def get_tenant_create(tenant_id, json_body):
 
 @get_group.command(name='tenant-service')
 @click.argument('tenant_id', type=str)
-def get_tenant_service(tenant_id):
-    """Tenant services list information"""
-    url = f"{Config.API_URL}/v1/billing/tenant/{tenant_id}/service/"
+@click.argument('service_id', required=False, type=str, default=None)
+def get_tenant_service(tenant_id, service_id):
+    """Tenant services list information (omit ID) / Tenant service detail information (with ID)"""
+    if service_id is not None:
+        url = f"{Config.API_URL}/v1/billing/tenant/{tenant_id}/service/{service_id}/"
+        params = {}
+    else:
+        url = f"{Config.API_URL}/v1/billing/tenant/{tenant_id}/service/"
+        params = {}
     headers = get_auth_headers()
-    params = {}
     data = None
     try:
         response = requests.get(url, headers=headers, params=params, json=data)
@@ -223,35 +233,6 @@ def create_tenant_service(tenant_id, json_body):
     data = json.loads(json_body) if json_body else None
     try:
         response = requests.post(url, headers=headers, params=params, json=data)
-        response.raise_for_status()
-        if response.content:
-            try:
-                click.echo(json.dumps(response.json(), indent=2))
-            except json.JSONDecodeError:
-                click.echo(response.text)
-        else:
-            click.echo('Success (No content)')
-    except requests.exceptions.RequestException as e:
-        click.echo(f"Error: {e}")
-        if e.response is not None:
-             click.echo(e.response.text)
-
-@cli.group(name='action')
-def action_group():
-    """Action operations."""
-    pass
-
-@action_group.command(name='tenant-retrieve-detail-2')
-@click.argument('tenant_id', type=str)
-@click.argument('client_id', type=str)
-def action_tenant_retrieve_detail_2(client_id, tenant_id):
-    """Client tenant detail information"""
-    url = f"{Config.API_URL}/v1/billing/{client_id}/tenant/{tenant_id}"
-    headers = get_auth_headers()
-    params = {}
-    data = None
-    try:
-        response = requests.get(url, headers=headers, params=params, json=data)
         response.raise_for_status()
         if response.content:
             try:

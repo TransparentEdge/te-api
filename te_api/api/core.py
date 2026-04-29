@@ -16,7 +16,7 @@ def get_group():
 
 @get_group.command(name='task-status')
 @click.argument('task_id', type=str)
-@click.option('--company-id', 'company_id', required=False, type=str, help='... (Default: from context)')
+@click.option('--company-id', 'company_id', required=False, type=str, help=' (Default: from context)')
 def get_task_status(company_id, task_id):
     """Task Status"""
     if company_id is None:
@@ -49,7 +49,7 @@ def delete_group():
 
 @delete_group.command(name='task-status')
 @click.argument('task_id', type=str)
-@click.option('--company-id', 'company_id', required=False, type=str, help='... (Default: from context)')
+@click.option('--company-id', 'company_id', required=False, type=str, help=' (Default: from context)')
 def delete_task_status(company_id, task_id):
     """Revoke Task"""
     if company_id is None:
@@ -81,7 +81,7 @@ def create_group():
     pass
 
 @create_group.command(name='revoke-token')
-@click.option('--all', 'all', help='If set to `true`, all tokens of the user will be revoked...', is_flag=True)
+@click.option('--all', 'all', help='If set to `true`, all tokens of the user will be revoked', is_flag=True)
 def create_revoke_token(all):
     """Revoke token"""
     url = f"{Config.API_URL}/v1/core/revoke_token/"

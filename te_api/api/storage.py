@@ -15,8 +15,8 @@ def get_group():
     pass
 
 @get_group.command(name='consumption')
-@click.option('--filters', 'filters', help='Time-based filters for storage data...', type=str)
-@click.option('--company-id', 'company_id', required=False, type=int, help='ID of the company to get storage information for... (Default: from context)')
+@click.option('--filters', 'filters', help='Time-based filters for storage data. JSON object with keys:   timestamp(object): {to(integer) End timestamp (Unix epoch), from(integer) Start timestamp (Unix epoch), interval(string) Data aggregation interval choices=[\'1m\']}', type=str)
+@click.option('--company-id', 'company_id', required=False, type=int, help='ID of the company to get storage information for (Default: from context)')
 def get_consumption(company_id, filters):
     """Get Storage consumption"""
     if company_id is None:

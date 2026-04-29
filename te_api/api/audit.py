@@ -15,12 +15,12 @@ def get_group():
     pass
 
 @get_group.command(name='action')
-@click.option('--search', 'search', help='A search term....', type=str)
-@click.option('--output', 'output', help='Set to **\'std\'** to use standard pagination format....', type=str)
-@click.option('--offset', 'offset', help='The number of items to **skip** before returning results. - Requires `limit` to be set. - Used for p...', type=int)
-@click.option('--limit', 'limit', help='The maximum number of items to return per page. - If not provided, the response will return **all**...', type=int)
-@click.option('--filters', 'filters', help='Time Filters...', required=True, type=str)
-@click.option('--company-id', 'company_id', required=False, type=str, help='... (Default: from context)')
+@click.option('--search', 'search', help='A search term.', type=str)
+@click.option('--output', 'output', help='Set to **\'std\'** to use standard pagination format.', type=click.Choice(['std']))
+@click.option('--offset', 'offset', help='The number of items to **skip** before returning results. - Requires `limit` to be set. - Used for pagination to retrieve the next set of results. - Example: `offset=10` skips the first 10 items.', type=int)
+@click.option('--limit', 'limit', help='The maximum number of items to return per page. - If not provided, the response will return **all** items. - If provided, the response will be **paginated**. - Use in combination with `offset` for pagination.', type=int)
+@click.option('--filters', 'filters', help='Time Filters. JSON object with keys:   timestamp(object [required]): {from(integer [required]), to(integer [required])}   vhost(array [required]) (array of string)   action(string) choices=[\'POST\', \'UPDATE\', \'DELETE\']   user(integer)', required=True, type=str)
+@click.option('--company-id', 'company_id', required=False, type=str, help=' (Default: from context)')
 def get_action(company_id, filters, limit, offset, output, search):
     """Get User actions"""
     if company_id is None:

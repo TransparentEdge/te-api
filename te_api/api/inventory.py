@@ -15,11 +15,16 @@ def get_group():
     pass
 
 @get_group.command(name='node')
-def get_node():
-    """Get Nodes List"""
-    url = f"{Config.API_URL}/v1/inventory/node/"
+@click.argument('node_id', required=False, type=str, default=None)
+def get_node(node_id):
+    """Get Nodes List (omit ID) / Get Node Details (with ID)"""
+    if node_id is not None:
+        url = f"{Config.API_URL}/v1/inventory/node/{node_id}/"
+        params = {}
+    else:
+        url = f"{Config.API_URL}/v1/inventory/node/"
+        params = {}
     headers = get_auth_headers()
-    params = {}
     data = None
     try:
         response = requests.get(url, headers=headers, params=params, json=data)
@@ -37,11 +42,16 @@ def get_node():
              click.echo(e.response.text)
 
 @get_group.command(name='owasp-rules')
-def get_owasp_rules():
-    """Get OWASP Core set of rules List"""
-    url = f"{Config.API_URL}/v1/inventory/owasp_rules/"
+@click.argument('rule_id', required=False, type=str, default=None)
+def get_owasp_rules(rule_id):
+    """Get OWASP Core set of rules List (omit ID) / Get OWASP Core set of rules Details (with ID)"""
+    if rule_id is not None:
+        url = f"{Config.API_URL}/v1/inventory/owasp_rules/{rule_id}/"
+        params = {}
+    else:
+        url = f"{Config.API_URL}/v1/inventory/owasp_rules/"
+        params = {}
     headers = get_auth_headers()
-    params = {}
     data = None
     try:
         response = requests.get(url, headers=headers, params=params, json=data)

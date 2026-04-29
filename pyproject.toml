@@ -1,6 +1,6 @@
 [project]
 name = "te-api"
-version = "0.1.1"
+version = "0.1.2"
 description = "Transparent Edge API CLI Tool"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 te-api = "te_api.cli:cli"
+te-api-ro = "te_api.cli:cli_ro"
 
 [build-system]
 requires = ["hatchling"]

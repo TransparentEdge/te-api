@@ -15,7 +15,7 @@ def get_group():
     pass
 
 @get_group.command(name='shared-url-retrieve')
-@click.option('--company-id', 'company_id', required=False, type=str, help='... (Default: from context)')
+@click.option('--company-id', 'company_id', required=False, type=str, help=' (Default: from context)')
 def get_shared_url_retrieve(company_id):
     """Get Shared URL List"""
     if company_id is None:
@@ -43,7 +43,7 @@ def get_shared_url_retrieve(company_id):
 
 @get_group.command(name='shared-url')
 @click.argument('url_id', type=str)
-@click.option('--company-id', 'company_id', required=False, type=str, help='... (Default: from context)')
+@click.option('--company-id', 'company_id', required=False, type=str, help=' (Default: from context)')
 def get_shared_url(company_id, url_id):
     """Get Shared URL Details"""
     if company_id is None:
@@ -115,11 +115,16 @@ def get_dashboard_preferences(preference_id):
              click.echo(e.response.text)
 
 @get_group.command(name='passkeys')
-def get_passkeys():
-    """User Passkeys List"""
-    url = f"{Config.API_URL}/v1/users/passkeys/"
+@click.argument('passkey_id', required=False, type=str, default=None)
+def get_passkeys(passkey_id):
+    """User Passkeys List (omit ID) / User Passkey Details (with ID)"""
+    if passkey_id is not None:
+        url = f"{Config.API_URL}/v1/users/passkeys/{passkey_id}/"
+        params = {}
+    else:
+        url = f"{Config.API_URL}/v1/users/passkeys/"
+        params = {}
     headers = get_auth_headers()
-    params = {}
     data = None
     try:
         response = requests.get(url, headers=headers, params=params, json=data)
@@ -137,9 +142,9 @@ def get_passkeys():
              click.echo(e.response.text)
 
 @get_group.command(name='remembered-device')
-@click.option('--search', 'search', help='A search term....', type=str)
-@click.option('--offset', 'offset', help='The number of items to **skip** before returning results. - Requires `limit` to be set. - Used for p...', type=int)
-@click.option('--limit', 'limit', help='The maximum number of items to return per page. - If not provided, the response will return **all**...', type=int)
+@click.option('--search', 'search', help='A search term.', type=str)
+@click.option('--offset', 'offset', help='The number of items to **skip** before returning results. - Requires `limit` to be set. - Used for pagination to retrieve the next set of results. - Example: `offset=10` skips the first 10 items.', type=int)
+@click.option('--limit', 'limit', help='The maximum number of items to return per page. - If not provided, the response will return **all** items. - If provided, the response will be **paginated**. - Use in combination with `offset` for pagination.', type=int)
 def get_remembered_device(limit, offset, search):
     """Remembered devices List"""
     url = f"{Config.API_URL}/v1/users/remembered_device/"
@@ -234,9 +239,9 @@ def get_roles_list(role_id):
              click.echo(e.response.text)
 
 @get_group.command(name='tokenrequests')
-@click.option('--search', 'search', help='A search term....', type=str)
-@click.option('--offset', 'offset', help='The number of items to **skip** before returning results. - Requires `limit` to be set. - Used for p...', type=int)
-@click.option('--limit', 'limit', help='The maximum number of items to return per page. - If not provided, the response will return **all**...', type=int)
+@click.option('--search', 'search', help='A search term.', type=str)
+@click.option('--offset', 'offset', help='The number of items to **skip** before returning results. - Requires `limit` to be set. - Used for pagination to retrieve the next set of results. - Example: `offset=10` skips the first 10 items.', type=int)
+@click.option('--limit', 'limit', help='The maximum number of items to return per page. - If not provided, the response will return **all** items. - If provided, the response will be **paginated**. - Use in combination with `offset` for pagination.', type=int)
 def get_tokenrequests(limit, offset, search):
     """Get User tokens List"""
     url = f"{Config.API_URL}/v1/users/tokenrequests/"
@@ -292,7 +297,7 @@ def create_group():
 
 @create_group.command(name='shared-url')
 @click.option('--json-body', 'json_body', help='JSON string for request body')
-@click.option('--company-id', 'company_id', required=False, type=str, help='... (Default: from context)')
+@click.option('--company-id', 'company_id', required=False, type=str, help=' (Default: from context)')
 def create_shared_url(company_id, json_body):
     """Create Shared URL"""
     if company_id is None:
@@ -393,7 +398,7 @@ def update_group():
 @update_group.command(name='shared-url')
 @click.option('--json-body', 'json_body', help='JSON string for request body')
 @click.argument('url_id', type=str)
-@click.option('--company-id', 'company_id', required=False, type=str, help='... (Default: from context)')
+@click.option('--company-id', 'company_id', required=False, type=str, help=' (Default: from context)')
 def update_shared_url(company_id, url_id, json_body):
     """Update Shared URL"""
     if company_id is None:
@@ -474,7 +479,7 @@ def delete_group():
 
 @delete_group.command(name='shared-url')
 @click.argument('url_id', type=str)
-@click.option('--company-id', 'company_id', required=False, type=str, help='... (Default: from context)')
+@click.option('--company-id', 'company_id', required=False, type=str, help=' (Default: from context)')
 def delete_shared_url(company_id, url_id):
     """Delete Shared URL"""
     if company_id is None:

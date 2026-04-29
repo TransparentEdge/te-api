@@ -15,7 +15,7 @@ def get_group():
     pass
 
 @get_group.command(name='preference-retrieve')
-@click.option('--company-id', 'company_id', required=False, type=str, help='... (Default: from context)')
+@click.option('--company-id', 'company_id', required=False, type=str, help=' (Default: from context)')
 def get_preference_retrieve(company_id):
     """Notification preferences List"""
     if company_id is None:
@@ -43,7 +43,7 @@ def get_preference_retrieve(company_id):
 
 @get_group.command(name='preference')
 @click.argument('preference_id', type=str)
-@click.option('--company-id', 'company_id', required=False, type=str, help='... (Default: from context)')
+@click.option('--company-id', 'company_id', required=False, type=str, help=' (Default: from context)')
 def get_preference(company_id, preference_id):
     """Notification preference Details"""
     if company_id is None:
@@ -70,7 +70,7 @@ def get_preference(company_id, preference_id):
              click.echo(e.response.text)
 
 @get_group.command(name='type-retrieve')
-@click.option('--company-id', 'company_id', required=False, type=str, help='... (Default: from context)')
+@click.option('--company-id', 'company_id', required=False, type=str, help=' (Default: from context)')
 def get_type_retrieve(company_id):
     """Notification types List"""
     if company_id is None:
@@ -119,14 +119,14 @@ def get_groups_retrieve():
              click.echo(e.response.text)
 
 @get_group.command(name='history')
-@click.option('--search', 'search', help='A search term....', type=str)
-@click.option('--read', 'read', help='Filter by read status (true or false)...', is_flag=True)
-@click.option('--offset', 'offset', help='The number of items to **skip** before returning results. - Requires `limit` to be set. - Used for p...', type=int)
-@click.option('--notification-type', 'notification_type', help='Filter by notification type ID...', type=int)
-@click.option('--notification-method', 'notification_method', help='Filter by notification method ID...', type=int)
-@click.option('--limit', 'limit', help='The maximum number of items to return per page. - If not provided, the response will return **all**...', type=int)
-@click.option('--ids', 'ids', help='Filter by notification IDs...', type=list)
-@click.option('--created-at', 'created_at', help='Filter by creation date (timestamp in seconds)...', type=str)
+@click.option('--search', 'search', help='A search term.', type=str)
+@click.option('--read', 'read', help='Filter by read status (true or false)', is_flag=True)
+@click.option('--offset', 'offset', help='The number of items to **skip** before returning results. - Requires `limit` to be set. - Used for pagination to retrieve the next set of results. - Example: `offset=10` skips the first 10 items.', type=int)
+@click.option('--notification-type', 'notification_type', help='Filter by notification type ID', type=int)
+@click.option('--notification-method', 'notification_method', help='Filter by notification method ID', type=int)
+@click.option('--limit', 'limit', help='The maximum number of items to return per page. - If not provided, the response will return **all** items. - If provided, the response will be **paginated**. - Use in combination with `offset` for pagination.', type=int)
+@click.option('--ids', 'ids', help='Filter by notification IDs', type=list)
+@click.option('--created-at', 'created_at', help='Filter by creation date (timestamp in seconds)', type=str)
 def get_history(created_at, ids, limit, notification_method, notification_type, offset, read, search):
     """Notification History List"""
     url = f"{Config.API_URL}/v1/notifications/history/"
@@ -187,7 +187,7 @@ def create_group():
 
 @create_group.command(name='preference')
 @click.option('--json-body', 'json_body', help='JSON string for request body')
-@click.option('--company-id', 'company_id', required=False, type=str, help='... (Default: from context)')
+@click.option('--company-id', 'company_id', required=False, type=str, help=' (Default: from context)')
 def create_preference(company_id, json_body):
     """Create Notification preference"""
     if company_id is None:
@@ -243,7 +243,7 @@ def delete_group():
 
 @delete_group.command(name='preference')
 @click.argument('preference_id', type=str)
-@click.option('--company-id', 'company_id', required=False, type=str, help='... (Default: from context)')
+@click.option('--company-id', 'company_id', required=False, type=str, help=' (Default: from context)')
 def delete_preference(company_id, preference_id):
     """Delete Notification preference"""
     if company_id is None:
