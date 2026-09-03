@@ -43,6 +43,20 @@ class Config:
 
     @classmethod
     def get_context(cls, key):
+        """Value for a context key, environment first.
+
+        ``te-api set-company`` persists to a file shared by every
+        invocation of the user, which is the wrong granularity for a
+        caller that works on several companies at once: it would have to
+        mutate global state around each call and race with itself.
+        Reading ``TRANSPARENT_COMPANY_ID`` (``TRANSPARENT_<KEY>`` in
+        general) from the environment scopes a single invocation instead,
+        and takes precedence over the persisted context.
+        """
+        env_value = os.getenv(f"TRANSPARENT_{key.upper()}")
+        if env_value:
+            return env_value
+
         if os.path.exists(cls.CONTEXT_FILE):
             try:
                 with open(cls.CONTEXT_FILE, "r") as f:

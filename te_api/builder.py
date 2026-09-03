@@ -1,11 +1,22 @@
-import yaml
+import hashlib
+import json
 import os
 import re
-import click
-import requests
 from pathlib import Path
 
+import click
+import requests
+import yaml
+
 DEFAULT_SCHEMA_URL = "https://api.transparentcdn.com/schema"
+
+# Written into each generated layer to record which generator produced
+# it.  A wheel has no post-install hook, so this is what makes an
+# upgraded te-api notice that the commands on disk are stale: the files
+# survive `uv tool install --force` (they are not part of the wheel) and
+# would otherwise keep being used, silently missing whatever the new
+# generator emits.
+BUILD_STAMP_FILE = ".build-stamp.json"
 
 # Mapping OpenAPI types to Click types
 TYPE_MAP = {
@@ -165,6 +176,30 @@ def to_kebab_case(name):
     return name.replace("_", "-").strip("-")
 
 
+def param_file_option(query_names, used_vars):
+    """Pick the variable and flag for the ``--file`` option.
+
+    Returns ``(None, None)`` when the command takes no query parameters,
+    since there would be nothing for the file to carry. If an endpoint
+    already has a parameter of its own called ``file``, the option falls
+    back to ``--params-file`` so the two flags cannot collide.
+    """
+    if not query_names:
+        return None, None
+
+    taken_flags = {to_kebab_case(name) for name in query_names}
+    flag = "--file" if "file" not in taken_flags else "--params-file"
+
+    var = "param_file"
+    idx = 1
+    while var in used_vars:
+        var = f"param_file_{idx}"
+        idx += 1
+    used_vars.add(var)
+
+    return var, flag
+
+
 def load_spec(spec_path):
     with open(spec_path, "r") as f:
         return yaml.safe_load(f)
@@ -257,8 +292,12 @@ def generate_function_code(command_name, path, method, details):
     params_code = []
     args_list = []
     pass_params = []
+    # Spec names of the query parameters, and which of them the schema
+    # marks required. Both feed the --file merge in the generated body.
+    query_names = []
+    required_names = []
     # Reserve variable names used in the generated function body to avoid collisions
-    used_vars = {"url", "headers", "params", "data", "response"}
+    used_vars = {"url", "headers", "params", "data", "response", "file_params"}
     path_var_map = {}
 
     if "parameters" in details:
@@ -322,8 +361,9 @@ def generate_function_code(command_name, path, method, details):
             elif param_in == "query":
                 query_choices = choices_from_schema(schema)
                 option_str = f"@click.option('--{to_kebab_case(name)}', '{clean_var_name}', help='{help_text}'"
-                if required:
-                    option_str += ", required=True"
+                # Required-ness is enforced after merging --file rather
+                # than by click, so a required parameter can arrive from
+                # the file instead of the command line.
                 if param_type == "boolean":
                     option_str += ", is_flag=True"
                 elif query_choices:
@@ -336,6 +376,9 @@ def generate_function_code(command_name, path, method, details):
                 params_code.append(option_str)
                 args_list.append(clean_var_name)
                 pass_params.append(f"'{name}': {clean_var_name}")
+                query_names.append(name)
+                if required:
+                    required_names.append(name)
 
     json_body_var = None
     if "requestBody" in details:
@@ -347,6 +390,16 @@ def generate_function_code(command_name, path, method, details):
             f"@click.option('--json-body', '{json_body_var}', help='JSON string for request body')"
         )
         args_list.append(json_body_var)
+
+    param_file_var, param_file_flag = param_file_option(query_names, used_vars)
+    if param_file_var:
+        params_code.append(
+            f"@click.option('{param_file_flag}', '{param_file_var}', "
+            f"type=click.Path(exists=True, dir_okay=False), "
+            f"help='Path to a JSON file with the query parameters. Avoids quoting "
+            f"JSON on the command line; explicit options win over the file.')"
+        )
+        args_list.append(param_file_var)
 
     final_path = path
     for raw, final in path_var_map.items():
@@ -374,7 +427,14 @@ def generate_function_code(command_name, path, method, details):
         for pp in pass_params:
             code += f"        {pp},\n"
         code += f"    }}\n"
-        code += f"    params = {{k: v for k, v in params.items() if v is not None}}\n"
+        if param_file_var:
+            code += f"    file_params = load_param_file({param_file_var})\n"
+        else:
+            code += f"    file_params = {{}}\n"
+        code += (
+            f"    params = merge_params(params, file_params, "
+            f"known={tuple(query_names)!r}, required={tuple(required_names)!r})\n"
+        )
     else:
         code += f"    params = {{}}\n"
 
@@ -486,10 +546,12 @@ def generate_merged_function_code(command_name, list_path, list_details,
     summary_detail = detail_details.get("summary", "Detail").replace('"', '\\"')
     summary = f"{summary_list} (omit ID) / {summary_detail} (with ID)"
 
-    used_vars = {"url", "headers", "params", "data", "response"}
+    used_vars = {"url", "headers", "params", "data", "response", "file_params"}
     params_code = []
     args_list = []
     pass_params = []
+    # Spec names of the query parameters, for the --file merge.
+    query_names = []
     path_var_map = {}
 
     id_var_name = clean_name(id_param)
@@ -571,6 +633,18 @@ def generate_merged_function_code(command_name, list_path, list_details,
             params_code.append(option_str)
             args_list.append(clean_var_name)
             pass_params.append((name, clean_var_name))
+            query_names.append(name)
+
+    param_file_var, param_file_flag = param_file_option(query_names, used_vars)
+    if param_file_var:
+        params_code.append(
+            f"@click.option('{param_file_flag}', '{param_file_var}', "
+            f"type=click.Path(exists=True, dir_okay=False), "
+            f"help='Path to a JSON file with the query parameters (only used when "
+            f"listing). Avoids quoting JSON on the command line; explicit options "
+            f"win over the file.')"
+        )
+        args_list.append(param_file_var)
 
     # Optional ID positional argument (must be last in click decorator stack
     # since decorators apply bottom-up; we prepend later when writing).
@@ -615,7 +689,16 @@ def generate_merged_function_code(command_name, list_path, list_details,
         for spec_name, var_name in pass_params:
             code += f"            '{spec_name}': {var_name},\n"
         code += "        }\n"
-        code += "        params = {k: v for k, v in params.items() if v is not None}\n"
+        if param_file_var:
+            code += f"        file_params = load_param_file({param_file_var})\n"
+        else:
+            code += "        file_params = {}\n"
+        # The merged generator deliberately leaves required-ness to the
+        # server, so nothing is enforced here.
+        code += (
+            f"        params = merge_params(params, file_params, "
+            f"known={tuple(query_names)!r})\n"
+        )
     else:
         code += "        params = {}\n"
 
@@ -768,7 +851,8 @@ def generate_from_spec(spec, output_dir, read_only=False, log=None):
             f.write("import requests\n")
             f.write("import json\n")
             f.write("from te_api.auth import get_auth_headers\n")
-            f.write("from te_api.config import Config\n\n")
+            f.write("from te_api.config import Config\n")
+            f.write("from te_api.params import load_param_file, merge_params\n\n")
 
             f.write("@click.group()\n")
             f.write(f"def cli():\n")
@@ -831,6 +915,36 @@ def generate_from_spec(spec, output_dir, read_only=False, log=None):
         for tag in generated_tags:
             f.write(f"    cli.add_command({tag}.cli, name='{to_kebab_case(tag)}')\n")
 
+    write_build_stamp(out_path)
+
+
+def builder_fingerprint() -> str:
+    """Short hash of this generator's source.
+
+    Any edit to the generator changes it, so nobody has to remember to
+    bump a version by hand.
+    """
+    try:
+        return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
+    except OSError:
+        # No readable source (zipimport and friends): treat every build
+        # as current rather than looping on rebuilds.
+        return "unknown"
+
+
+def write_build_stamp(out_path: Path) -> None:
+    """Record which generator produced the layer in ``out_path``."""
+    stamp = {"builder": builder_fingerprint()}
+    (out_path / BUILD_STAMP_FILE).write_text(json.dumps(stamp), encoding="utf-8")
+
+
+def read_build_stamp(out_path: Path) -> str | None:
+    """Return the generator fingerprint recorded in ``out_path``, if any."""
+    try:
+        return str(json.loads((out_path / BUILD_STAMP_FILE).read_text(encoding="utf-8"))["builder"])
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return None
+
 
 def _api_dir(read_only: bool) -> Path:
     """Filesystem path of the generated API package, regardless of where
@@ -838,9 +952,22 @@ def _api_dir(read_only: bool) -> Path:
     return Path(__file__).parent / ("api_ro" if read_only else "api")
 
 
-def is_built(read_only: bool = False) -> bool:
-    """True if the generated registry exists for the requested layer."""
+def is_generated(read_only: bool = False) -> bool:
+    """True if a generated layer exists at all, current or not."""
     return (_api_dir(read_only) / "registry.py").exists()
+
+
+def is_built(read_only: bool = False) -> bool:
+    """True if the generated layer exists and matches this generator.
+
+    A layer produced by an older generator counts as not built, so the
+    next run regenerates it instead of running commands that lack the
+    options this version emits.
+    """
+    api_dir = _api_dir(read_only)
+    if not (api_dir / "registry.py").exists():
+        return False
+    return read_build_stamp(api_dir) == builder_fingerprint()
 
 
 _CREDENTIALS_HELP = (
@@ -860,27 +987,55 @@ _CREDENTIALS_HELP = (
 
 
 def ensure_api_built(read_only: bool = False) -> bool:
-    """If the generated module is missing, download the schema and build
-    it. Returns True if a build was performed.
+    """Build the generated layer if it is missing or out of date.
 
-    On missing credentials prints a friendly explanation to stderr and
-    raises SystemExit(1)."""
+    Out of date means produced by a different version of the generator,
+    which is what happens on an upgrade: the generated files are not
+    part of the wheel, so they survive a reinstall and would otherwise
+    keep being used.  Returns True if a build was performed.
+
+    With nothing generated at all there is no CLI to offer, so missing
+    credentials print an explanation and exit.  When a stale layer is
+    present the failure is not fatal: it warns and carries on with the
+    commands already on disk, so an upgrade cannot leave someone without
+    a working tool just because they happen to be offline.
+    """
     import sys
 
     if is_built(read_only):
         return False
 
+    stale = is_generated(read_only)
     from .config import Config
 
+    def _give_up(reason: str) -> bool:
+        if not stale:
+            return False
+        click.echo(
+            f"WARNING: te-api could not regenerate its API commands ({reason}).\n"
+            f"         Continuing with the ones already generated, which may not\n"
+            f"         match this version. Run 'te-api build' when you can.",
+            err=True,
+        )
+        return True
+
     if not Config.CLIENT_ID or not Config.CLIENT_SECRET:
+        if _give_up("no OAuth2 credentials configured"):
+            return False
         click.echo(_CREDENTIALS_HELP, err=True)
         sys.exit(1)
 
     label = "read-only " if read_only else ""
-    click.echo(
-        f"Initializing TE-API: downloading {label}API schema...", err=True
-    )
-    spec = download_spec(DEFAULT_SCHEMA_URL)
+    action = "Updating" if stale else "Initializing"
+    click.echo(f"{action} TE-API: downloading {label}API schema...", err=True)
+
+    try:
+        spec = download_spec(DEFAULT_SCHEMA_URL)
+    except Exception as exc:  # network, auth, malformed schema...
+        if _give_up(f"{type(exc).__name__}: {exc}"):
+            return False
+        raise
+
     generate_from_spec(
         spec, str(_api_dir(read_only)), read_only=read_only, log=lambda _msg: None
     )

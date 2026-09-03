@@ -1,0 +1,63 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+.venv/
+env/
+.env/
+
+# Environment Variables (CRITICAL)
+.env
+.env.*
+!.env.example
+
+# Local Tool Storage (Tokens)
+.te-api/
+token.json
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Auto-generated API command modules. Built on first run by
+# te_api.builder.ensure_api_built (or manually via `te-api build`)
+# from the user's own OpenAPI schema.
+te_api/api/*.py
+!te_api/api/__init__.py
+te_api/api_ro/*.py
+!te_api/api_ro/__init__.py
+
+# OpenAPI spec snapshot. Each user downloads their own; we don't ship one.
+transparent-api.yaml
