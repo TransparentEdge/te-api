@@ -18,6 +18,12 @@ DEFAULT_SCHEMA_URL = "https://api.transparentcdn.com/schema"
 # generator emits.
 BUILD_STAMP_FILE = ".build-stamp.json"
 
+# Machine-readable description of every generated command, written
+# beside the modules. `te-api search` and `te-api describe` read it, so
+# a caller can find a command and learn its parameters without walking
+# the --help tree.
+CATALOG_FILE = "catalog.json"
+
 # Mapping OpenAPI types to Click types
 TYPE_MAP = {
     "integer": "int",
@@ -49,9 +55,113 @@ VERB_MAP = {
 }
 
 
+def dereference(node, components, _stack=()):
+    """Return ``node`` with every ``$ref`` replaced by the referenced
+    component schema. A cycle is cut with a bare object so the walk
+    always terminates."""
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str):
+            name = ref.rsplit("/", 1)[-1]
+            if name in _stack:
+                return {"type": "object", "description": f"(recursive {name})"}
+            target = components.get(name)
+            if target is None:
+                return {"type": "object"}
+            return dereference(target, components, _stack + (name,))
+        return {k: dereference(v, components, _stack) for k, v in node.items()}
+    if isinstance(node, list):
+        return [dereference(v, components, _stack) for v in node]
+    return node
+
+
+def dereference_spec(spec):
+    """Resolve every ``$ref`` under ``paths``. Request body schemas are
+    almost always references into ``components.schemas``, and the help
+    generator only understands inline schemas."""
+    components = spec.get("components", {}).get("schemas", {})
+    spec = dict(spec)
+    spec["paths"] = dereference(spec.get("paths", {}), components)
+    return spec
+
+
+def normalize_schema(schema):
+    """Fold ``allOf`` into one schema and give ``oneOf``/``anyOf`` a
+    readable type, so the help generator sees a plain object."""
+    if not isinstance(schema, dict):
+        return {}
+    if "allOf" in schema:
+        merged = {k: v for k, v in schema.items() if k != "allOf"}
+        props = dict(merged.get("properties", {}))
+        required = list(merged.get("required", []))
+        for part in schema["allOf"]:
+            part = normalize_schema(part)
+            props.update(part.get("properties", {}))
+            required.extend(r for r in part.get("required", []) if r not in required)
+            for key in ("type", "description"):
+                merged.setdefault(key, part.get(key)) if part.get(key) else None
+        if props:
+            merged["properties"] = props
+            merged.setdefault("type", "object")
+        if required:
+            merged["required"] = required
+        return merged
+    for key in ("oneOf", "anyOf"):
+        if key in schema:
+            alternatives = [normalize_schema(a) for a in schema[key]]
+            merged = {k: v for k, v in schema.items() if k != key}
+            merged["type"] = "|".join(_schema_type(a) for a in alternatives)
+            return merged
+    return schema
+
+
+def _one_line(text):
+    """Collapse a multi-line description so it fits a help string."""
+    return " ".join(str(text or "").split())
+
+
+def _schema_type(schema):
+    schema = normalize_schema(schema)
+    kind = schema.get("type", "string")
+    if kind == "array" and "items" in schema:
+        return f"array of {_schema_type(schema['items'])}"
+    return kind
+
+
+def _describe_property(name, schema, required, depth):
+    """One ``name(type [required]) description`` entry, recursing one
+    level into nested objects."""
+    schema = normalize_schema(schema)
+    kind = schema.get("type", "string")
+    req_marker = " [required]" if name in required else ""
+    desc = _one_line(schema.get("description", ""))
+
+    if kind == "object" and schema.get("properties") and depth > 0:
+        nested_req = set(schema.get("required", []))
+        entries = [
+            _describe_property(sub, sub_schema, nested_req, depth - 1)
+            for sub, sub_schema in schema["properties"].items()
+            if not sub_schema.get("readOnly")
+        ]
+        return f"{name}(object{req_marker}): {{{', '.join(entries)}}}"
+
+    entry = f"{name}({_schema_type(schema)}{req_marker})"
+    if desc:
+        entry += f" {desc}"
+    if "enum" in schema:
+        entry += f" choices={schema['enum']}"
+    return entry
+
+
 def build_object_help(schema, description=""):
-    """Build a descriptive help text from an object schema's properties."""
+    """Build a descriptive help text from an object schema's properties.
+
+    ``readOnly`` properties are left out: they describe what the API
+    returns, never what a caller may send.
+    """
+    schema = normalize_schema(schema)
     properties = schema.get("properties", {})
+    description = _one_line(description)
     if not properties:
         return description
 
@@ -63,48 +173,35 @@ def build_object_help(schema, description=""):
     parts.append("JSON object with keys:")
 
     for prop_name, prop_schema in properties.items():
-        prop_type = prop_schema.get("type", "string")
-        prop_desc = prop_schema.get("description", "")
-        req_marker = " [required]" if prop_name in required_fields else ""
-
-        # Handle nested objects (e.g., timestamp with from/to)
-        if prop_type == "object":
-            nested_props = prop_schema.get("properties", {})
-            nested_req = set(prop_schema.get("required", []))
-            if nested_props:
-                sub_keys = []
-                for sub_name, sub_schema in nested_props.items():
-                    sub_type = sub_schema.get("type", "string")
-                    sub_desc = sub_schema.get("description", "")
-                    sub_req = " [required]" if sub_name in nested_req else ""
-                    entry = f"{sub_name}({sub_type}{sub_req})"
-                    if sub_desc:
-                        entry += f" {sub_desc}"
-                    # Handle enum in nested properties
-                    if "enum" in sub_schema:
-                        entry += f" choices={sub_schema['enum']}"
-                    sub_keys.append(entry)
-                parts.append(
-                    f"  {prop_name}(object{req_marker}): {{{', '.join(sub_keys)}}}"
-                )
-                continue
-
-        entry = f"  {prop_name}({prop_type}{req_marker})"
-        if prop_desc:
-            entry += f" {prop_desc}"
-
-        # Handle enum values
-        if "enum" in prop_schema:
-            entry += f" choices={prop_schema['enum']}"
-
-        # Handle array items description
-        if prop_type == "array" and "items" in prop_schema:
-            items_type = prop_schema["items"].get("type", "string")
-            entry += f" (array of {items_type})"
-
-        parts.append(entry)
+        if prop_schema.get("readOnly"):
+            continue
+        parts.append("  " + _describe_property(prop_name, prop_schema, required_fields, 1))
 
     return " ".join(parts)
+
+
+def body_schema(details):
+    """The JSON request body schema of an operation, or None."""
+    content = details.get("requestBody", {}).get("content", {})
+    for media_type, media in content.items():
+        if media_type.startswith("application/json") or media_type == "*/*":
+            return normalize_schema(media.get("schema", {}))
+    return None
+
+
+def build_body_help(schema):
+    """Help text for ``--json-body`` describing what the endpoint takes."""
+    if not schema:
+        return "JSON request body"
+    kind = schema.get("type", "object")
+    desc = _one_line(schema.get("description", ""))
+    if kind == "object":
+        text = build_object_help(schema, desc or "JSON request body")
+        return text if text != desc else (desc or "JSON request body")
+    text = f"JSON request body: {_schema_type(schema)}"
+    if desc:
+        text += f". {desc}"
+    return text
 
 
 def choices_from_schema(schema):
@@ -297,7 +394,7 @@ def generate_function_code(command_name, path, method, details):
     query_names = []
     required_names = []
     # Reserve variable names used in the generated function body to avoid collisions
-    used_vars = {"url", "headers", "params", "data", "response", "file_params"}
+    used_vars = {"url", "params", "data", "file_params", "call"}
     path_var_map = {}
 
     if "parameters" in details:
@@ -380,16 +477,30 @@ def generate_function_code(command_name, path, method, details):
                 if required:
                     required_names.append(name)
 
-    json_body_var = None
+    json_body_var = body_file_var = None
     if "requestBody" in details:
         json_body_var = "json_body"
         if json_body_var in used_vars:
             json_body_var = "request_body_json"
         used_vars.add(json_body_var)
+        body_file_var = "body_file"
+        if body_file_var in used_vars:
+            body_file_var = "request_body_file"
+        used_vars.add(body_file_var)
+        body_help = (
+            build_body_help(body_schema(details))
+            .replace("\\", "\\\\")
+            .replace("'", "\\'")
+        )
         params_code.append(
-            f"@click.option('--json-body', '{json_body_var}', help='JSON string for request body')"
+            f"@click.option('--json-body', '{json_body_var}', help='{body_help}')"
+        )
+        params_code.append(
+            f"@click.option('--body-file', '{body_file_var}', "
+            f"help='Read the JSON request body from this file, or from stdin with -.')"
         )
         args_list.append(json_body_var)
+        args_list.append(body_file_var)
 
     param_file_var, param_file_flag = param_file_option(query_names, used_vars)
     if param_file_var:
@@ -414,13 +525,9 @@ def generate_function_code(command_name, path, method, details):
 
     # Inject context logic for company_id
     if "company_id" in args_list:
-        code += f"    if company_id is None:\n"
-        code += f"        company_id = Config.get_context('company_id')\n"
-        code += f"    if company_id is None:\n"
-        code += f"        raise click.UsageError(\"Missing 'company_id'. Specify it with --company-id or set a default with 'te-api set-company <id>'.\")\n"
+        code += "    company_id = resolve_company_id(company_id)\n"
 
     code += f'    url = f"{{Config.API_URL}}{final_path}"\n'
-    code += f"    headers = get_auth_headers()\n"
 
     if pass_params:
         code += f"    params = {{\n"
@@ -439,24 +546,11 @@ def generate_function_code(command_name, path, method, details):
         code += f"    params = {{}}\n"
 
     if json_body_var:
-        code += f"    data = json.loads({json_body_var}) if {json_body_var} else None\n"
+        code += f"    data = load_body({json_body_var}, {body_file_var})\n"
     else:
         code += f"    data = None\n"
 
-    code += f"    try:\n"
-    code += f"        response = requests.{method}(url, headers=headers, params=params, json=data)\n"
-    code += f"        response.raise_for_status()\n"
-    code += f"        if response.content:\n"
-    code += f"            try:\n"
-    code += f"                click.echo(json.dumps(response.json(), indent=2))\n"
-    code += f"            except json.JSONDecodeError:\n"
-    code += f"                click.echo(response.text)\n"
-    code += f"        else:\n"
-    code += f"            click.echo('Success (No content)')\n"
-    code += f"    except requests.exceptions.RequestException as e:\n"
-    code += f'        click.echo(f"Error: {{e}}")\n'
-    code += f"        if e.response is not None:\n"
-    code += f"             click.echo(e.response.text)\n"
+    code += f"    call({method!r}, url, params=params, data=data)\n"
 
     return code
 
@@ -546,7 +640,7 @@ def generate_merged_function_code(command_name, list_path, list_details,
     summary_detail = detail_details.get("summary", "Detail").replace('"', '\\"')
     summary = f"{summary_list} (omit ID) / {summary_detail} (with ID)"
 
-    used_vars = {"url", "headers", "params", "data", "response", "file_params"}
+    used_vars = {"url", "params", "data", "file_params", "call"}
     params_code = []
     args_list = []
     pass_params = []
@@ -671,13 +765,7 @@ def generate_merged_function_code(command_name, list_path, list_details,
     code += f'    """{summary}"""\n'
 
     if "company_id" in args_list:
-        code += "    if company_id is None:\n"
-        code += "        company_id = Config.get_context('company_id')\n"
-        code += "    if company_id is None:\n"
-        code += (
-            "        raise click.UsageError(\"Missing 'company_id'. Specify it with "
-            "--company-id or set a default with 'te-api set-company <id>'.\")\n"
-        )
+        code += "    company_id = resolve_company_id(company_id)\n"
 
     code += f"    if {id_var_name} is not None:\n"
     code += f'        url = f"{{Config.API_URL}}{final_detail_path}"\n'
@@ -702,22 +790,7 @@ def generate_merged_function_code(command_name, list_path, list_details,
     else:
         code += "        params = {}\n"
 
-    code += "    headers = get_auth_headers()\n"
-    code += "    data = None\n"
-    code += "    try:\n"
-    code += f"        response = requests.{method}(url, headers=headers, params=params, json=data)\n"
-    code += "        response.raise_for_status()\n"
-    code += "        if response.content:\n"
-    code += "            try:\n"
-    code += "                click.echo(json.dumps(response.json(), indent=2))\n"
-    code += "            except json.JSONDecodeError:\n"
-    code += "                click.echo(response.text)\n"
-    code += "        else:\n"
-    code += "            click.echo('Success (No content)')\n"
-    code += "    except requests.exceptions.RequestException as e:\n"
-    code += '        click.echo(f"Error: {e}")\n'
-    code += "        if e.response is not None:\n"
-    code += "             click.echo(e.response.text)\n"
+    code += f"    call({method!r}, url, params=params)\n"
 
     return code
 
@@ -778,6 +851,113 @@ def build(from_file, schema_url, client_id, client_secret, output_dir, read_only
     generate_from_spec(spec, output_dir, read_only)
 
 
+def describe_parameters(details, skip_path_param=None):
+    """Catalog entries for an operation's parameters, in the shape the
+    generated command exposes them: ``flag`` for options, ``argument``
+    for positionals."""
+    entries = []
+    for param in details.get("parameters", []):
+        name = param["name"]
+        location = param["in"]
+        if location == "path" and name == skip_path_param:
+            continue
+        schema = param.get("schema", {})
+        entry = {
+            "name": name,
+            "in": location,
+            "type": schema.get("type", "string"),
+            "required": bool(param.get("required", False)),
+            "description": _one_line(param.get("description", "")),
+        }
+        if name == "company_id":
+            entry["flag"] = "--company-id"
+            entry["required"] = False
+            entry["description"] = (
+                entry["description"] + " Defaults to the company context "
+                "(TRANSPARENT_COMPANY_ID or te-api set-company)."
+            ).strip()
+        elif location == "path":
+            entry["argument"] = True
+        elif location == "query":
+            entry["flag"] = "--" + to_kebab_case(name)
+        choices = choices_from_schema(schema)
+        if choices:
+            entry["choices"] = choices
+        if "default" in schema:
+            entry["default"] = schema["default"]
+        if schema.get("type") == "object" and "properties" in schema:
+            entry["schema"] = schema
+        entries.append(entry)
+    return entries
+
+
+def catalog_entry(module, verb, cmd_name, data):
+    """One catalog record for a resolved command."""
+    entry = {
+        "command": f"{module} {verb} {cmd_name}",
+        "module": module,
+        "verb": verb,
+        "resource": cmd_name,
+        "method": data["method"],
+    }
+    if data["kind"] == "merged":
+        details = data["list_details"]
+        entry["path"] = data["list_path"]
+        entry["detail_path"] = data["detail_path"]
+        entry["summary"] = _one_line(
+            f"{details.get('summary', 'List')} (omit ID) / "
+            f"{data['detail_details'].get('summary', 'Detail')} (with ID)"
+        )
+        entry["parameters"] = describe_parameters(details, skip_path_param=data["id_param"])
+        entry["parameters"].append(
+            {
+                "name": data["id_param"],
+                "in": "path",
+                "type": "string",
+                "required": False,
+                "argument": True,
+                "description": "Omit to list, give an ID to fetch one item.",
+            }
+        )
+    else:
+        details = data["details"]
+        entry["path"] = data["path"]
+        entry["summary"] = _one_line(details.get("summary", ""))
+        entry["parameters"] = describe_parameters(details)
+        schema = body_schema(details)
+        if "requestBody" in details:
+            entry["body"] = schema if schema is not None else {}
+
+    description = _one_line(details.get("description", ""))
+    if description and description != entry["summary"]:
+        entry["description"] = description
+
+    options = []
+    if any(p["in"] == "query" for p in entry["parameters"]):
+        query_names = [p["name"] for p in entry["parameters"] if p["in"] == "query"]
+        options.append(param_file_option(query_names, set())[1])
+    if "body" in entry:
+        options.extend(["--json-body", "--body-file"])
+    if options:
+        entry["options"] = options
+    return entry
+
+
+def write_catalog(out_path, entries, read_only):
+    payload = {"read_only": read_only, "commands": entries}
+    (out_path / CATALOG_FILE).write_text(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
+    )
+
+
+def load_catalog(read_only=False):
+    """The catalog of the generated layer, or None if there is none."""
+    try:
+        return json.loads((_api_dir(read_only) / CATALOG_FILE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def generate_from_spec(spec, output_dir, read_only=False, log=None):
     """Generate API command modules from an already-loaded OpenAPI spec.
     `log` is an optional callable used for progress output (defaults to
@@ -785,6 +965,7 @@ def generate_from_spec(spec, output_dir, read_only=False, log=None):
     if log is None:
         log = click.echo
 
+    spec = dereference_spec(spec)
     unique_cmds = {}
 
     for path, methods in spec["paths"].items():
@@ -840,6 +1021,7 @@ def generate_from_spec(spec, output_dir, read_only=False, log=None):
     os.makedirs(out_path, exist_ok=True)
 
     generated_tags = []
+    catalog = []
 
     # 1. Generate Tag Files
     for tag, verbs in unique_cmds.items():
@@ -848,11 +1030,12 @@ def generate_from_spec(spec, output_dir, read_only=False, log=None):
 
         with open(file_path, "w") as f:
             f.write("import click\n")
-            f.write("import requests\n")
-            f.write("import json\n")
-            f.write("from te_api.auth import get_auth_headers\n")
             f.write("from te_api.config import Config\n")
-            f.write("from te_api.params import load_param_file, merge_params\n\n")
+            f.write("from te_api.http import call\n")
+            f.write(
+                "from te_api.params import load_body, load_param_file, "
+                "merge_params, resolve_company_id\n\n"
+            )
 
             f.write("@click.group()\n")
             f.write(f"def cli():\n")
@@ -873,6 +1056,7 @@ def generate_from_spec(spec, output_dir, read_only=False, log=None):
                         cmd_name = "index"
 
                     f.write(f"@{group_func}.command(name='{cmd_name}')\n")
+                    catalog.append(catalog_entry(to_kebab_case(tag), verb, cmd_name, data))
 
                     func_name = f"{verb}_{cmd_name}".replace("-", "_")
                     if func_name == group_func:
@@ -915,6 +1099,7 @@ def generate_from_spec(spec, output_dir, read_only=False, log=None):
         for tag in generated_tags:
             f.write(f"    cli.add_command({tag}.cli, name='{to_kebab_case(tag)}')\n")
 
+    write_catalog(out_path, catalog, read_only)
     write_build_stamp(out_path)
 
 

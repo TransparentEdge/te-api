@@ -218,10 +218,14 @@ query string, so there is no escaping to get right. The rules:
 te-api companies get current-user
 
 # List alerts for a company
-te-api companies get alerts <COMPANY_ID>
+te-api companies get alerts --company-id <COMPANY_ID>
 
 # Purge cache (te-api only, not available in te-api-ro)
-te-api companies create invalidate <COMPANY_ID> --json-body '{"urls": ["..."]}'
+te-api companies create invalidate <SIZE> --json-body '{"urls": ["..."]}'
+
+# The same body from a file, or from stdin with -
+te-api companies create invalidate <SIZE> --body-file purge.json
+echo '{"urls": ["..."]}' | te-api companies create invalidate <SIZE> --body-file -
 
 # Query delivery statistics (available in both binaries)
 te-api statistics get delivery analytic table --company-id 12345 \
@@ -233,6 +237,77 @@ te-api statistics get delivery analytic table --company-id 12345 \
   --key-field tcdn.varnish.agent --file query.json
 ```
 
+#### Request bodies
+
+Commands that take a body accept `--json-body '<json>'` or `--body-file
+<path>` (`-` reads stdin), never both. `--help` describes the body from
+the schema: each property with its type, `[required]` marker and
+description. Properties the API marks `readOnly` are left out, since they
+are returned, never sent.
+
+```bash
+te-api companies create alerts --help
+# --json-body TEXT  JSON request body. JSON object with keys:
+#                   threshold(integer [required]) company(integer [required])
+#                   service(integer) active(boolean) reactions(array of object [required])
+```
+
+### Output and Exit Codes
+
+The tool is meant to be driven by scripts and AI agents as much as by
+people, so the output follows a fixed contract:
+
+- **stdout holds the API response and nothing else.** JSON is
+  pretty-printed when stdout is a terminal and compact when it is piped.
+  `--output pretty|compact` (before the module name) or the
+  `TE_API_OUTPUT` variable forces one.
+- **Errors are one JSON object on stderr**, and stdout stays empty:
+  ```json
+  {"error": {"type": "api", "message": "HTTP 404 Not Found", "status": 404,
+             "url": "https://api.transparentcdn.com/v1/inventory/node/1/",
+             "body": {"code": "not_found", "message": "Not found."}}}
+  ```
+  `type` is `api` (the API answered with an error status), `transport`
+  (it could not be reached) or `auth` (no token could be obtained).
+- **Exit codes**: 0 success, 1 API error, 2 bad command line (missing or
+  unknown option, invalid JSON), 3 API or token endpoint unreachable.
+
+```bash
+te-api companies get current-user | jq .id          # compact JSON into jq
+te-api --output pretty companies get current-user    # force indentation
+```
+
+### Finding Commands
+
+Beyond `--help`, two commands read a catalog the generator writes next to
+the command modules:
+
+```bash
+# Free-text search over names, summaries, descriptions and parameter names
+te-api search waf events
+# [{"command":"statistics get waf","summary":"WAF statistics","method":"get",
+#   "path":"/v2/statistics/{company_id}/waf/{temporality}/{request_type}/","score":3.0}, ...]
+
+# Full definition of one command: parameters, types, choices, body schema
+te-api describe statistics get waf
+
+# Everything under a prefix
+te-api describe billing get
+```
+
+### Guide for Scripts and Agents
+
+`te-api agents` prints a short guide with the command shape, how to find
+commands, the output contract and how to scope the company. It can be
+installed as a Claude Code skill:
+
+```bash
+mkdir -p ~/.claude/skills/te-api
+te-api agents --skill > ~/.claude/skills/te-api/SKILL.md
+```
+
+Use `te-api-ro` for the read-only variant of either.
+
 ### Differences between `te-api` and `te-api-ro`
 
 | Feature | `te-api` | `te-api-ro` |
@@ -243,6 +318,7 @@ te-api statistics get delivery analytic table --company-id 12345 \
 | DELETE operations | Yes | No |
 | `authentication` module | Yes | No |
 | Login / Context / Completions | Yes | Yes |
+| `search` / `describe` / `agents` | Yes | Yes |
 
 ## 4. Project Architecture
 
@@ -251,14 +327,19 @@ The project is split into a **static core** (hand-written) and a **dynamic API l
 ### Main Components
 
 1.  **Core (`te_api/`)**:
-    -   `cli.py`: Hosts the `create_cli()` factory that builds a CLI group with the static commands (`login`, `set-company`, `clear-company`, `show-context`, `completion`, `build`) and lazily registers the API commands from the requested module on first use. Exposes two instances: `cli` (full) and `cli_ro` (read-only). **Contains no API business logic.**
+    -   `cli.py`: Hosts the `create_cli()` factory that builds a CLI group with the static commands (`login`, `set-company`, `clear-company`, `show-context`, `completion`, `build`, `search`, `describe`, `agents`) and lazily registers the API commands from the requested module on first use. Exposes two instances: `cli` (full) and `cli_ro` (read-only). **Contains no API business logic.**
+    -   `http.py`: The one place every generated command sends its request through. Defines the output contract: response on stdout, JSON error on stderr, exit codes.
+    -   `params.py`: `--file`, `--json-body`/`--body-file` loading and the company-id context resolution, shared by the generated commands.
+    -   `catalog.py`: Search over the generated command catalog, behind `search` and `describe`.
+    -   `guide.py`: The text printed by `agents`.
     -   `auth.py`: Manages the OAuth2 flow plus token storage and renewal.
     -   `config.py`: Loads configuration from environment variables and `.env`.
 
 2.  **Generator (`te_api/builder.py`)**:
     -   The heart of maintenance. Downloads the spec from `https://api.transparentcdn.com/schema` (or reads it from a local file with `--from-file`).
     -   Normalizes names, resolves version conflicts, and groups endpoints.
-    -   Produces rich help text for object-typed parameters via `build_object_help()`, detailing fields, types, and required flags.
+    -   Produces rich help text for object-typed parameters and request bodies via `build_object_help()`, detailing fields, types, and required flags. `$ref`s are resolved first (`dereference_spec()`).
+    -   Writes `catalog.json`, the machine-readable description of every command behind `search` and `describe`.
     -   Extracts `enum`/`pattern` values from the schema to drive `click.Choice` arguments and options (`choices_from_schema()`).
     -   Supports the `--read-only` flag to emit only GET operations.
     -   Exposes `ensure_api_built()`, which the CLI calls on first run to generate the modules automatically, and again whenever the generated layer was produced by a different version of the generator.
@@ -266,6 +347,7 @@ The project is split into a **static core** (hand-written) and a **dynamic API l
 3.  **Full API Layer (`te_api/api/`)** -- generated at runtime:
     -   One module per OpenAPI tag (e.g. `audit.py`, `billing.py`) covering every operation.
     -   `registry.py`: imports all modules and registers them on the main CLI.
+    -   `catalog.json`: one record per command (parameters, body schema, method, path) read by `search` and `describe`.
     -   Not committed to git (only the `__init__.py` is tracked).
 
 4.  **Read-Only API Layer (`te_api/api_ro/`)** -- generated at runtime:
@@ -284,8 +366,12 @@ te-api/
 │   ├── __main__.py       # Entry point
 │   ├── auth.py           # Authentication logic
 │   ├── builder.py        # Generator that turns the OpenAPI schema into CLI modules
+│   ├── catalog.py        # Search over the generated command catalog
 │   ├── cli.py            # CLI factory: create_cli() -> cli + cli_ro (auto-build included)
 │   ├── config.py         # Configuration
+│   ├── guide.py          # Guide printed by `agents`
+│   ├── http.py           # Request + output contract shared by generated commands
+│   ├── params.py         # --file / --body-file loading, company context
 │   ├── api/              # Modules generated at runtime (FULL - all operations)
 │   │   └── __init__.py   # the only tracked file; everything else is gitignored
 │   └── api_ro/           # Modules generated at runtime (READ-ONLY - GET only)

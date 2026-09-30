@@ -24,6 +24,7 @@ emitted as generated source.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -112,3 +113,42 @@ def merge_params(
         )
 
     return {name: encode_param(value) for name, value in merged.items() if value is not None}
+
+
+def resolve_company_id(value: str | None) -> str:
+    """The company ID for a command: the explicit option, else the
+    context (``TRANSPARENT_COMPANY_ID`` or ``te-api set-company``)."""
+    if value is None:
+        from .config import Config
+
+        value = Config.get_context("company_id")
+    if value is None:
+        raise click.UsageError(
+            "Missing 'company_id'. Specify it with --company-id, set "
+            "TRANSPARENT_COMPANY_ID, or set a default with 'te-api set-company <id>'."
+        )
+    return value
+
+
+def load_body(json_body: str | None, body_file: str | None) -> Any:
+    """The request body: ``--json-body`` inline, or ``--body-file`` read
+    from a path (``-`` for stdin). Either, not both."""
+    if json_body is not None and body_file is not None:
+        raise click.UsageError("Pass either --json-body or --body-file, not both.")
+
+    if body_file is not None:
+        source = f"--body-file '{body_file}'"
+        try:
+            raw = sys.stdin.read() if body_file == "-" else Path(body_file).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise click.UsageError(f"Cannot read {source}: {exc}") from exc
+    elif json_body is not None:
+        source = "--json-body"
+        raw = json_body
+    else:
+        return None
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise click.UsageError(f"{source} is not valid JSON: {exc}") from exc

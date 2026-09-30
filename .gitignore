@@ -56,8 +56,12 @@ Thumbs.db
 # from the user's own OpenAPI schema.
 te_api/api/*.py
 !te_api/api/__init__.py
+te_api/api/.build-stamp.json
+te_api/api/catalog.json
 te_api/api_ro/*.py
 !te_api/api_ro/__init__.py
+te_api/api_ro/.build-stamp.json
+te_api/api_ro/catalog.json
 
 # OpenAPI spec snapshot. Each user downloads their own; we don't ship one.
 transparent-api.yaml

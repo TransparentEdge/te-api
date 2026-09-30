@@ -1,8 +1,21 @@
 import json
 import os
 import time
+from typing import Any
+
 import requests
+
 from .config import Config
+
+
+class AuthError(Exception):
+    """Could not obtain an OAuth2 token: missing credentials, the token
+    endpoint rejected them, or it could not be reached."""
+
+    def __init__(self, message: str, status: int | None = None, body: Any = None):
+        super().__init__(message)
+        self.status = status
+        self.body = body
 
 
 def ensure_token_dir():
@@ -26,7 +39,10 @@ def get_valid_token():
             return token_data.get("access_token")
 
     # If no valid token, authenticate
-    Config.validate()
+    try:
+        Config.validate()
+    except ValueError as exc:
+        raise AuthError(str(exc)) from exc
 
     auth_url = f"{Config.API_URL}/v1/oauth2/access_token/"
     payload = {
@@ -36,30 +52,33 @@ def get_valid_token():
     }
 
     try:
-        response = requests.post(auth_url, data=payload)
+        response = requests.post(auth_url, data=payload, timeout=60)
         response.raise_for_status()
-        data = response.json()
-
-        access_token = data.get("access_token")
-        expires_in = data.get("expires_in", 36000)
-
-        token_data = {
-            "access_token": access_token,
-            "expires_at": time.time()
-            + expires_in
-            - 60,  # Subtract 60s for safety margin
-        }
-
-        with open(Config.TOKEN_FILE, "w") as f:
-            json.dump(token_data, f)
-
-        return access_token
-
     except requests.exceptions.RequestException as e:
-        print(f"Error authenticating: {e}")
-        if e.response:
-            print(f"Response: {e.response.text}")
-        raise
+        status = body = None
+        if e.response is not None:
+            status = e.response.status_code
+            try:
+                body = e.response.json()
+            except ValueError:
+                body = e.response.text
+        raise AuthError(f"Error authenticating: {e}", status=status, body=body) from e
+
+    data = response.json()
+    access_token = data.get("access_token")
+    expires_in = data.get("expires_in", 36000)
+
+    token_data = {
+        "access_token": access_token,
+        "expires_at": time.time()
+        + expires_in
+        - 60,  # Subtract 60s for safety margin
+    }
+
+    with open(Config.TOKEN_FILE, "w") as f:
+        json.dump(token_data, f)
+
+    return access_token
 
 
 def get_auth_headers():

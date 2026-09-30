@@ -131,3 +131,67 @@ def test_none_values_are_dropped():
 def test_option_flag_is_kebab_case():
     assert option_flag("result_size") == "--result-size"
     assert option_flag("filters") == "--filters"
+
+
+# -- load_body --
+
+
+def test_load_body_without_either_is_none():
+    from te_api.params import load_body
+
+    assert load_body(None, None) is None
+
+
+def test_load_body_inline():
+    from te_api.params import load_body
+
+    assert load_body('{"a": 1}', None) == {"a": 1}
+
+
+def test_load_body_from_file(tmp_path):
+    from te_api.params import load_body
+
+    path = tmp_path / "body.json"
+    path.write_text('[1, 2]')
+
+    assert load_body(None, str(path)) == [1, 2]
+
+
+def test_load_body_from_stdin(monkeypatch):
+    import io
+
+    from te_api.params import load_body
+
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"from": "stdin"}'))
+
+    assert load_body(None, "-") == {"from": "stdin"}
+
+
+def test_load_body_rejects_both():
+    import click
+    import pytest
+
+    from te_api.params import load_body
+
+    with pytest.raises(click.UsageError, match="not both"):
+        load_body("{}", "x.json")
+
+
+def test_load_body_reports_invalid_json_as_usage_error():
+    import click
+    import pytest
+
+    from te_api.params import load_body
+
+    with pytest.raises(click.UsageError, match="--json-body is not valid JSON"):
+        load_body("{oops", None)
+
+
+def test_load_body_reports_a_missing_file_as_usage_error(tmp_path):
+    import click
+    import pytest
+
+    from te_api.params import load_body
+
+    with pytest.raises(click.UsageError, match="Cannot read --body-file"):
+        load_body(None, str(tmp_path / "nope.json"))
